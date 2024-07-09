@@ -13,7 +13,7 @@ import (
 var db *sql.DB
 
 func saveUser(chatID int64, username string) {
-	_, err := db.Exec("INSERT INTO Users (chat_id, username, balance) VALUES (?, ?, ?, 0) ON DUPLICATE KEY UPDATE username=VALUES(username)", chatID, username)
+	_, err := db.Exec("INSERT INTO Users (chat_id, username) VALUES (?, ?) ON DUPLICATE KEY UPDATE username=VALUES(username)", chatID, username)
 	if err != nil {
 		log.Printf("Failed to save user: %v\n", err)
 	} else {
@@ -31,45 +31,56 @@ type userDb struct {
 func getDbTeleg(chatID int64, username string) (userDb, error) {
 	var dbRow userDb
 
-	fmt.Printf("Searching for chatID: %d, username: %s", chatID, username)
 	err := db.QueryRow("SELECT id, chat_id, username, balance FROM Users WHERE chat_id = ? AND username = ?",
 		chatID, username).Scan(&dbRow.ID, &dbRow.ChatID, &dbRow.Username, &dbRow.Balance)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			fmt.Println("No rows found.")
 			return userDb{}, fmt.Errorf("нет данных для заданных критериев")
 		}
-		fmt.Printf("Error querying database: %v\n", err)
 		return userDb{}, err
 	}
 
 	return dbRow, nil
 }
 
-func main() {
-	token := "6585541253:AAHXh-XKJQo-o_rXgVnt3Z9t51eT8Zfh1kc"
+// conf.бот
+const (
+	botToken   = "6585541253:AAHXh-XKJQo-o_rXgVnt3Z9t51eT8Zfh1kc"
+	isBotDebub = true
+	botTimeout = 60
+)
 
+// conf.база_данных
+const (
+	usernameDb     = "root"
+	passwordDb     = "12345"
+	connectionType = "tcp"
+	addressDb      = "127.0.0.1:3306"
+	nameDb         = "telegrambot"
+)
+
+func main() {
 	var err error
 
 	// Подключение к базе данных
-	dsn := "root:12345@tcp(127.0.0.1:3306)/telegrambot"
+	dsn := (usernameDb + ":" + passwordDb + "@" + connectionType + "(" + addressDb + ")/" + nameDb)
 	db, err = sql.Open("mysql", dsn)
 	if err != nil {
 		log.Fatalf("Unable to connect to database: %v\n", err)
 	}
 	defer db.Close()
 
-	bot, err := tgbotapi.NewBotAPI(token)
+	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
 		log.Panic(err)
 	}
 
-	bot.Debug = true
+	bot.Debug = isBotDebub
 
 	log.Printf("Авторизован как %s", bot.Self.UserName)
 
 	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
+	u.Timeout = botTimeout
 
 	updates := bot.GetUpdatesChan(u)
 
@@ -166,24 +177,33 @@ func main() {
 						continue
 					}
 					balanceStr := strconv.FormatFloat(dbData.Balance, 'f', 2, 64)
+					chatId := strconv.FormatInt(dbData.ChatID, 10)
 					pageTitle = ("Привет,  " + update.CallbackQuery.From.UserName + "!\n" +
-						"Ваш ID: " + update.CallbackQuery.ID + "\n\n" +
+						"Ваш ID: " + chatId + "\n\n" +
 						"Ваш Баланс: " + balanceStr + "\n")
 					pagePhoto = "other/cabinet.webp"
 					pageInline = inlineCabinet
 				}
-
 				photoFile := tgbotapi.FilePath(pagePhoto)
-				newPhotoMsg := tgbotapi.NewPhoto(update.CallbackQuery.Message.Chat.ID, photoFile)
-				newPhotoMsg.Caption = pageTitle
-				newPhotoMsg.ReplyMarkup = pageInline
 
-				_, err := bot.Send(newPhotoMsg)
-				if err != nil {
-					log.Panic(err)
+				m := tgbotapi.EditMessageMediaConfig{
+					BaseEdit: tgbotapi.BaseEdit{
+						ChatID:          update.CallbackQuery.Message.Chat.ID,
+						MessageID:       update.CallbackQuery.Message.MessageID,
+						InlineMessageID: update.CallbackQuery.InlineMessageID,
+						ReplyMarkup:     &pageInline,
+					},
+					Media: tgbotapi.InputMediaPhoto{
+						BaseInputMedia: tgbotapi.BaseInputMedia{
+							Type:    "photo",
+							Media:   photoFile,
+							Caption: pageTitle,
+						},
+					},
 				}
-				delMsg := tgbotapi.NewDeleteMessage(update.CallbackQuery.Message.Chat.ID, update.CallbackQuery.Message.MessageID)
-				if _, err := bot.Request(delMsg); err != nil {
+
+				_, err := bot.Request(m)
+				if err != nil {
 					log.Panic(err)
 				}
 			}
